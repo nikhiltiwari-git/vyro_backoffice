@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vyro Client Backoffice</title>
+  <meta name="description" content="Advanced trading analytics dashboard for broker report analysis. Visualize PnL curves, charges breakdown, and detailed trade statistics." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- ============ UPLOAD SCREEN ============ -->
+  <div id="upload-screen" class="upload-screen">
+    <div class="upload-container">
+      <div class="upload-brand">
+        <div class="brand-icon">
+          <svg viewBox="0 0 48 48" fill="none"><path d="M24 4L6 14v20l18 10 18-10V14L24 4z" stroke="url(#g1)" stroke-width="2.5" fill="none"/><path d="M24 24V44M6 14l18 10 18-10" stroke="url(#g1)" stroke-width="2.5" fill="none"/><defs><linearGradient id="g1" x1="0" y1="0" x2="48" y2="48"><stop stop-color="#6366f1"/><stop offset="1" stop-color="#06b6d4"/></linearGradient></defs></svg>
+        </div>
+        <h1>Vyro <span class="accent"> Backoffice</span></h1>
+        <p class="upload-subtitle">Trading Analytics Dashboard</p>
+      </div>
+
+      <div class="capital-input-group">
+        <label for="initial-capital">Initial Capital (₹)</label>
+        <div class="input-wrapper">
+          <span class="input-prefix">₹</span>
+          <input type="number" id="initial-capital" value="3000000" min="0" step="100000" placeholder="Your Capital Dude :/" />
+        </div>
+      </div>
+
+      <div class="upload-zones">
+        <div class="upload-zone" id="zone-trade" data-type="trade">
+          <div class="zone-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10,9 9,9 8,9"/></svg>
+          </div>
+          <h3>Trade Report</h3>
+          <p>Trade Confirmation with individual trades</p>
+          <span class="zone-status" id="status-trade">Drop .xlsx or click to upload</span>
+          <input type="file" accept=".xlsx,.xls,.csv" class="zone-file-input" id="file-trade" />
+        </div>
+
+        <div class="upload-zone" id="zone-pl" data-type="pl">
+          <div class="zone-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17,8 12,3 7,8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          </div>
+          <h3>Derivative PL Statement</h3>
+          <p>Symbol-wise P&amp;L summary</p>
+          <span class="zone-status" id="status-pl">Optional — Drop .xlsx or click</span>
+          <input type="file" accept=".xlsx,.xls,.csv" class="zone-file-input" id="file-pl" />
+        </div>
+
+        <div class="upload-zone" id="zone-fifo" data-type="fifo">
+          <div class="zone-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
+          </div>
+          <h3>FIFO Net Position</h3>
+          <p>FIFO-matched net positions</p>
+          <span class="zone-status" id="status-fifo">Optional — Drop .xlsx or click</span>
+          <input type="file" accept=".xlsx,.xls,.csv" class="zone-file-input" id="file-fifo" />
+        </div>
+      </div>
+
+      <button class="btn-analyze" id="btn-analyze" disabled>
+        <span class="btn-text">Analyze Reports</span>
+        <span class="btn-loader"></span>
+      </button>
+      <p class="upload-note">Trade Report is mandatory. PL Statement and FIFO are optional cross-references.</p>
+    </div>
+  </div>
+
+  <!-- ============ DASHBOARD ============ -->
+  <div id="dashboard-screen" class="dashboard-screen hidden">
+    <!-- Top Nav -->
+    <nav class="topbar">
+      <div class="topbar-left">
+        <div class="brand-small">
+          <svg viewBox="0 0 48 48" fill="none" width="28" height="28"><path d="M24 4L6 14v20l18 10 18-10V14L24 4z" stroke="url(#g2)" stroke-width="2.5" fill="none"/><path d="M24 24V44M6 14l18 10 18-10" stroke="url(#g2)" stroke-width="2.5" fill="none"/><defs><linearGradient id="g2" x1="0" y1="0" x2="48" y2="48"><stop stop-color="#6366f1"/><stop offset="1" stop-color="#06b6d4"/></linearGradient></defs></svg>
+          <span>Vyro<span class="accent">Backoffice</span></span>
+        </div>
+      </div>
+      <div class="topbar-center">
+        <button class="tab-btn active" data-tab="overview" id="tab-btn-overview">Overview</button>
+        <button class="tab-btn" data-tab="trades" id="tab-btn-trades">Trades</button>
+        <button class="tab-btn" data-tab="calendar" id="tab-btn-calendar">Calendar</button>
+        <button class="tab-btn" data-tab="charges" id="tab-btn-charges">Charges</button>
+      </div>
+      <div class="topbar-right">
+        <div class="capital-badge">
+          <span class="capital-label">Capital</span>
+          <span class="capital-value" id="nav-capital">₹30,00,000</span>
+        </div>
+        <button class="btn-reset" id="btn-reset" title="Upload new files">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><polyline points="1,4 1,10 7,10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+        </button>
+      </div>
+    </nav>
+
+    <!-- ============ OVERVIEW TAB ============ -->
+    <main id="tab-overview" class="tab-content active">
+      <section class="stat-cards" id="stat-cards">
+        <div class="stat-card" id="card-net-pnl">
+          <span class="stat-label">Net P&amp;L</span>
+          <span class="stat-value" id="stat-net-pnl">—</span>
+          <span class="stat-sub" id="stat-net-pnl-pct">—</span>
+        </div>
+        <div class="stat-card" id="card-gross-pnl">
+          <span class="stat-label">Gross P&amp;L</span>
+          <span class="stat-value" id="stat-gross-pnl">—</span>
+          <span class="stat-sub" id="stat-total-charges-inline">Charges: —</span>
+        </div>
+        <div class="stat-card" id="card-win-rate">
+          <span class="stat-label">Win Rate</span>
+          <span class="stat-value" id="stat-win-rate">—</span>
+          <span class="stat-sub" id="stat-win-loss-count">— W / — L</span>
+        </div>
+        <div class="stat-card" id="card-profit-factor">
+          <span class="stat-label">Profit Factor</span>
+          <span class="stat-value" id="stat-profit-factor">—</span>
+          <span class="stat-sub" id="stat-expectancy">Expectancy: —</span>
+        </div>
+        <div class="stat-card" id="card-max-dd">
+          <span class="stat-label">Max Drawdown</span>
+          <span class="stat-value" id="stat-max-dd">—</span>
+          <span class="stat-sub" id="stat-max-dd-pct">—</span>
+        </div>
+        <div class="stat-card" id="card-sharpe">
+          <span class="stat-label">Sharpe Ratio</span>
+          <span class="stat-value" id="stat-sharpe">—</span>
+          <span class="stat-sub" id="stat-sortino">Sortino: —</span>
+        </div>
+        <div class="stat-card" id="card-avg-win">
+          <span class="stat-label">Avg Profit (Win Days)</span>
+          <span class="stat-value" id="stat-avg-win">—</span>
+          <span class="stat-sub" id="stat-total-win-days">Win days: —</span>
+        </div>
+        <div class="stat-card" id="card-avg-loss">
+          <span class="stat-label">Avg Loss (Loss Days)</span>
+          <span class="stat-value" id="stat-avg-loss">—</span>
+          <span class="stat-sub" id="stat-total-loss-days">Loss days: —</span>
+        </div>
+        <div class="stat-card" id="card-volatility">
+          <span class="stat-label">Daily Volatility</span>
+          <span class="stat-value" id="stat-volatility">—</span>
+          <span class="stat-sub" id="stat-ann-volatility">Annualized: —</span>
+        </div>
+        <div class="stat-card" id="card-best-day">
+          <span class="stat-label">Best Day</span>
+          <span class="stat-value" id="stat-best-day">—</span>
+          <span class="stat-sub" id="stat-best-day-date">—</span>
+        </div>
+        <div class="stat-card" id="card-worst-day">
+          <span class="stat-label">Worst Day</span>
+          <span class="stat-value" id="stat-worst-day">—</span>
+          <span class="stat-sub" id="stat-worst-day-date">—</span>
+        </div>
+        <div class="stat-card" id="card-trading-days">
+          <span class="stat-label">Trading Days</span>
+          <span class="stat-value" id="stat-trading-days">—</span>
+          <span class="stat-sub" id="stat-total-trades">Trades: —</span>
+        </div>
+      </section>
+
+      <!-- Equity Curve -->
+      <section class="chart-card full-width" id="section-equity">
+        <div class="chart-header">
+          <h2>Equity Curve</h2>
+          <div class="chart-toggle-group">
+            <button class="chart-toggle active" data-series="equity" id="toggle-equity">Equity</button>
+            <button class="chart-toggle" data-series="drawdown" id="toggle-drawdown">Drawdown</button>
+          </div>
+        </div>
+        <div id="chart-equity" class="chart-area"></div>
+      </section>
+
+      <!-- Two-column row -->
+      <section class="chart-row">
+        <div class="chart-card" id="section-weekday">
+          <div class="chart-header"><h2>Day-of-Week Avg P&amp;L</h2></div>
+          <div id="chart-weekday" class="chart-area chart-area-sm"></div>
+        </div>
+        <div class="chart-card" id="section-monthly">
+          <div class="chart-header"><h2>Monthly P&amp;L</h2></div>
+          <div id="chart-monthly" class="chart-area chart-area-sm"></div>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- ============ TRADES TAB ============ -->
+    <main id="tab-trades" class="tab-content">
+      <section class="chart-card full-width">
+        <div class="chart-header">
+          <h2>Trade Log</h2>
+          <div class="table-controls">
+            <input type="text" id="trade-search" placeholder="Search symbol, date..." class="table-search" />
+          </div>
+        </div>
+        <div class="table-wrapper" id="trade-table-wrapper">
+          <table id="trade-table" class="data-table">
+            <thead><tr id="trade-table-head"></tr></thead>
+            <tbody id="trade-table-body"></tbody>
+          </table>
+        </div>
+        <div class="table-pagination" id="trade-pagination"></div>
+      </section>
+
+      <section class="chart-card full-width">
+        <div class="chart-header"><h2>Daily P&amp;L Summary</h2></div>
+        <div class="table-wrapper" id="daily-pnl-table-wrapper">
+          <table id="daily-pnl-table" class="data-table">
+            <thead><tr id="daily-pnl-head"></tr></thead>
+            <tbody id="daily-pnl-body"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <!-- ============ CALENDAR TAB ============ -->
+    <main id="tab-calendar" class="tab-content">
+      <!-- Date Range Filter -->
+      <section class="cal-filter-bar">
+        <div class="cal-filter-group">
+          <label for="cal-date-from">From</label>
+          <input type="date" id="cal-date-from" class="cal-date-input" />
+        </div>
+        <div class="cal-filter-group">
+          <label for="cal-date-to">To</label>
+          <input type="date" id="cal-date-to" class="cal-date-input" />
+        </div>
+        <button class="cal-filter-btn" id="cal-filter-apply">Apply Filter</button>
+        <button class="cal-filter-btn cal-filter-reset" id="cal-filter-reset">Reset</button>
+      </section>
+
+      <!-- Filtered Range Stats -->
+      <section class="stat-cards cal-range-stats hidden" id="cal-range-stats">
+        <div class="stat-card"><span class="stat-label">Range Net P&amp;L</span><span class="stat-value" id="cal-range-pnl">—</span></div>
+        <div class="stat-card"><span class="stat-label">Range Win Rate</span><span class="stat-value" id="cal-range-winrate">—</span></div>
+        <div class="stat-card"><span class="stat-label">Range Trades</span><span class="stat-value" id="cal-range-days">—</span></div>
+        <div class="stat-card"><span class="stat-label">Range Avg Daily</span><span class="stat-value" id="cal-range-avg">—</span></div>
+      </section>
+
+      <!-- Calendar + Monthly Stats -->
+      <div class="cal-layout">
+        <!-- Calendar Card -->
+        <section class="chart-card cal-card-main">
+          <div class="cal-nav">
+            <button class="cal-nav-btn" id="cal-prev" title="Previous month">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><polyline points="15,18 9,12 15,6"/></svg>
+            </button>
+            <h2 class="cal-month-title" id="cal-month-title">—</h2>
+            <button class="cal-nav-btn" id="cal-next" title="Next month">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><polyline points="9,18 15,12 9,6"/></svg>
+            </button>
+          </div>
+          <div class="cal-weekday-row">
+            <span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span>
+          </div>
+          <div class="cal-grid" id="cal-grid"></div>
+          <!-- Tooltip -->
+          <div class="cal-tooltip" id="cal-tooltip">
+            <div class="cal-tooltip-date" id="cal-tooltip-date"></div>
+            <div class="cal-tooltip-pnl" id="cal-tooltip-pnl"></div>
+            <div class="cal-tooltip-detail" id="cal-tooltip-detail"></div>
+          </div>
+        </section>
+
+        <!-- Monthly Stats Sidebar -->
+        <section class="chart-card cal-card-stats">
+          <h2 class="cal-stats-title">Monthly Stats</h2>
+          <div class="cal-stat-row"><span class="cal-stat-lbl">Net P&amp;L</span><span class="cal-stat-val" id="cal-m-pnl">—</span></div>
+          <div class="cal-stat-row"><span class="cal-stat-lbl">Gross P&amp;L</span><span class="cal-stat-val" id="cal-m-gross">—</span></div>
+          <div class="cal-stat-row"><span class="cal-stat-lbl">Total Charges</span><span class="cal-stat-val" id="cal-m-charges">—</span></div>
+          <hr class="cal-stat-divider"/>
+          <div class="cal-stat-row"><span class="cal-stat-lbl">Win Days</span><span class="cal-stat-val" id="cal-m-wins">—</span></div>
+          <div class="cal-stat-row"><span class="cal-stat-lbl">Loss Days</span><span class="cal-stat-val" id="cal-m-losses">—</span></div>
+          <div class="cal-stat-row"><span class="cal-stat-lbl">Win Rate</span><span class="cal-stat-val" id="cal-m-winrate">—</span></div>
+          <hr class="cal-stat-divider"/>
+          <div class="cal-stat-row"><span class="cal-stat-lbl">Best Day</span><span class="cal-stat-val profit" id="cal-m-best">—</span></div>
+          <div class="cal-stat-row"><span class="cal-stat-lbl">Worst Day</span><span class="cal-stat-val loss" id="cal-m-worst">—</span></div>
+          <div class="cal-stat-row"><span class="cal-stat-lbl">Avg Daily</span><span class="cal-stat-val" id="cal-m-avg">—</span></div>
+          <hr class="cal-stat-divider"/>
+          <div class="cal-stat-row"><span class="cal-stat-lbl">Trading Days</span><span class="cal-stat-val" id="cal-m-days">—</span></div>
+        </section>
+      </div>
+
+      <!-- Weekly PnL Bar Chart -->
+      <section class="chart-card full-width">
+        <div class="chart-header"><h2>Weekly P&amp;L</h2></div>
+        <div id="chart-weekly" class="chart-area chart-area-sm"></div>
+      </section>
+    </main>
+
+    <!-- ============ CHARGES TAB ============ -->
+    <main id="tab-charges" class="tab-content">
+      <section class="stat-cards charges-summary" id="charges-stat-cards">
+        <div class="stat-card"><span class="stat-label">Total Brokerage</span><span class="stat-value" id="stat-brokerage">—</span></div>
+        <div class="stat-card"><span class="stat-label">Total STT</span><span class="stat-value" id="stat-stt">—</span></div>
+        <div class="stat-card"><span class="stat-label">Exchange Txn Charges</span><span class="stat-value" id="stat-exchange">—</span></div>
+        <div class="stat-card"><span class="stat-label">GST (18%)</span><span class="stat-value" id="stat-gst">—</span></div>
+        <div class="stat-card"><span class="stat-label">SEBI Fee</span><span class="stat-value" id="stat-sebi">—</span></div>
+        <div class="stat-card"><span class="stat-label">Stamp Duty</span><span class="stat-value" id="stat-stamp">—</span></div>
+      </section>
+
+      <section class="chart-row">
+        <div class="chart-card">
+          <div class="chart-header"><h2>Charges Breakdown</h2></div>
+          <div id="chart-charges-donut" class="chart-area chart-area-sm"></div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-header"><h2>Daily Charges vs Gross P&amp;L</h2></div>
+          <div id="chart-charges-vs-pnl" class="chart-area chart-area-sm"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- CDN Libraries — no Node required -->
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/apexcharts@4.3.0/dist/apexcharts.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
