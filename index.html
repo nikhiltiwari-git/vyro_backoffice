@@ -82,6 +82,15 @@
         </div>
       </div>
       <div class="topbar-center">
+        <!-- Global Date Filter -->
+        <div class="global-filter">
+          <input type="date" id="global-date-from" class="global-date-input" title="Start Date" />
+          <span class="global-filter-sep">-</span>
+          <input type="date" id="global-date-to" class="global-date-input" title="End Date" />
+          <button class="global-filter-btn" id="global-filter-apply" title="Apply Filter">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+          </button>
+        </div>
         <button class="tab-btn active" data-tab="overview" id="tab-btn-overview">Overview</button>
         <button class="tab-btn" data-tab="trades" id="tab-btn-trades">Trades</button>
         <button class="tab-btn" data-tab="calendar" id="tab-btn-calendar">Calendar</button>
@@ -119,7 +128,32 @@
         <div class="stat-card" id="card-profit-factor">
           <span class="stat-label">Profit Factor</span>
           <span class="stat-value" id="stat-profit-factor">—</span>
-          <span class="stat-sub" id="stat-expectancy">Expectancy: —</span>
+          <span class="stat-sub">Gross Win / Gross Loss</span>
+        </div>
+        <div class="stat-card" id="card-total-trades">
+          <span class="stat-label">Total Trades</span>
+          <span class="stat-value" id="stat-total-trades">—</span>
+          <span class="stat-sub">FIFO Matched Legs</span>
+        </div>
+        <div class="stat-card" id="card-expectancy">
+          <span class="stat-label">Trade Expectancy</span>
+          <span class="stat-value" id="stat-expectancy-main">—</span>
+          <span class="stat-sub">Avg P&amp;L per trade</span>
+        </div>
+        <div class="stat-card" id="card-win-streak">
+          <span class="stat-label">Max Win Streak</span>
+          <span class="stat-value profit" id="stat-win-streak">—</span>
+          <span class="stat-sub">Consecutive days</span>
+        </div>
+        <div class="stat-card" id="card-loss-streak">
+          <span class="stat-label">Max Loss Streak</span>
+          <span class="stat-value loss" id="stat-loss-streak">—</span>
+          <span class="stat-sub">Consecutive days</span>
+        </div>
+        <div class="stat-card" id="card-avg-trades">
+          <span class="stat-label">Avg Trades / Day</span>
+          <span class="stat-value" id="stat-avg-trades">—</span>
+          <span class="stat-sub">Activity rate</span>
         </div>
         <div class="stat-card" id="card-max-dd">
           <span class="stat-label">Max Drawdown</span>
@@ -187,6 +221,12 @@
         </div>
       </section>
 
+      <!-- Time of Day -->
+      <section class="chart-card full-width" id="section-timeofday">
+        <div class="chart-header"><h2>Time of Day (Cumulative P&amp;L by Hour)</h2></div>
+        <div id="chart-timeofday" class="chart-area chart-area-sm"></div>
+      </section>
+
     </main>
 
     <!-- ============ TRADES TAB ============ -->
@@ -195,6 +235,10 @@
         <div class="chart-header">
           <h2>Trade Log</h2>
           <div class="table-controls">
+            <button class="table-btn-export" id="btn-export-csv" title="Download CSV">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+              Export
+            </button>
             <input type="text" id="trade-search" placeholder="Search symbol, date..." class="table-search" />
           </div>
         </div>

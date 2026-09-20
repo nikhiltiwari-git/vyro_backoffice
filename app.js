@@ -12,6 +12,7 @@
   // GLOBALS
   // ──────────────────────────────────────────────
   let uploadedFiles = { trade: null, pl: null, fifo: null };
+  let rawTrades = [];         // Store parsed trades for fast re-filtering
   let analysisResult = null;
   let charts = {};
   let currentEquityView = 'equity'; // 'equity' | 'drawdown'
@@ -183,6 +184,40 @@
     return trades;
   }
 
+  function applyGlobalFilterAndRender() {
+    if (rawTrades.length === 0) return;
+    
+    // Get filter dates
+    const fromVal = document.getElementById('global-date-from').value;
+    const toVal = document.getElementById('global-date-to').value;
+    
+    let filteredTrades = rawTrades;
+    if (fromVal && toVal) {
+      const from = new Date(fromVal);
+      const to = new Date(toVal);
+      to.setHours(23, 59, 59);
+      filteredTrades = rawTrades.filter(t => t.tradeDate >= from && t.tradeDate <= to);
+    }
+    
+    if (filteredTrades.length === 0) {
+      alert("No trades found in this date range.");
+      return;
+    }
+
+    const initialCapital = parseFloat(document.getElementById('initial-capital').value) || 3000000;
+    analysisResult = runAnalysis(filteredTrades, initialCapital);
+    
+    // Set default dates to filter inputs if empty
+    if (!fromVal || !toVal) {
+      const first = analysisResult.dailyPnl[0].date;
+      const last = analysisResult.dailyPnl[analysisResult.dailyPnl.length - 1].date;
+      document.getElementById('global-date-from').value = first.toISOString().split('T')[0];
+      document.getElementById('global-date-to').value = last.toISOString().split('T')[0];
+    }
+    
+    renderDashboard(analysisResult);
+  }
+
   // ──────────────────────────────────────────────
   // 2. CHARGE CALCULATION
   // Matches the Python script's calculate_charges()
@@ -268,9 +303,15 @@
           const pnl = (lot.price - price) * matchQty; // short cover
           realizedEvents.push({
             date: tradeDate,
+            tradeTime: trade.tradeTime,
             contract: key,
+            symbol: trade.symbol,
+            optionType: trade.optionType,
+            strikePrice: trade.strikePrice,
             pnl: pnl,
-            quantity: matchQty
+            qty: matchQty,
+            entryPrice: lot.price,
+            exitPrice: price
           });
           lot.qty -= matchQty;
           qty -= matchQty;
@@ -287,9 +328,15 @@
           const pnl = (price - lot.price) * matchQty; // sell
           realizedEvents.push({
             date: tradeDate,
+            tradeTime: trade.tradeTime,
             contract: key,
+            symbol: trade.symbol,
+            optionType: trade.optionType,
+            strikePrice: trade.strikePrice,
             pnl: pnl,
-            quantity: matchQty
+            qty: matchQty,
+            entryPrice: lot.price,
+            exitPrice: price
           });
           lot.qty -= matchQty;
           qty -= matchQty;
@@ -445,6 +492,25 @@
     const bestDay = dailyPnl.length > 0 ? dailyPnl.reduce((best, d) => d.netPnl > best.netPnl ? d : best, dailyPnl[0]) : null;
     const worstDay = dailyPnl.length > 0 ? dailyPnl.reduce((worst, d) => d.netPnl < worst.netPnl ? d : worst, dailyPnl[0]) : null;
 
+    // --- Streaks ---
+    let maxWinStreak = 0, currentWinStreak = 0;
+    let maxLossStreak = 0, currentLossStreak = 0;
+    for (const d of dailyPnl) {
+      if (d.netPnl > 0) {
+        currentWinStreak++;
+        maxWinStreak = Math.max(maxWinStreak, currentWinStreak);
+        currentLossStreak = 0;
+      } else if (d.netPnl < 0) {
+        currentLossStreak++;
+        maxLossStreak = Math.max(maxLossStreak, currentLossStreak);
+        currentWinStreak = 0;
+      } else {
+        // Flat day resets streaks
+        currentWinStreak = 0;
+        currentLossStreak = 0;
+      }
+    }
+
     // --- Day of week average PnL ---
     const dayOfWeekPnl = { Monday: [], Tuesday: [], Wednesday: [], Thursday: [], Friday: [] };
     for (const d of dailyPnl) {
@@ -498,6 +564,23 @@
     }
     const segmentPnl = Object.entries(segmentMap).map(([k, v]) => ({ segment: k, pnl: v }));
 
+    // --- Time of Day Analysis ---
+    const timeOfDayMap = {};
+    for (const ev of realizedEvents) {
+      if (!ev.tradeTime) continue;
+      const parts = ev.tradeTime.split(':');
+      if (parts.length >= 1) {
+        let hr = parseInt(parts[0], 10);
+        if (hr >= 9 && hr <= 15) {
+          const slot = String(hr).padStart(2, '0') + ':00';
+          timeOfDayMap[slot] = (timeOfDayMap[slot] || 0) + ev.pnl;
+        }
+      }
+    }
+    const timeOfDayPnl = Object.entries(timeOfDayMap).map(([k, v]) => ({
+      time: k, pnl: v
+    })).sort((a, b) => a.time.localeCompare(b.time));
+
     return {
       trades: tradesWithCharges,
       realizedEvents,
@@ -508,6 +591,7 @@
       segmentPnl,
       dayOfWeekAvg,
       totalChargesBreakdown,
+      timeOfDayPnl,
       stats: {
         initialCapital,
         totalNetPnl,
@@ -530,7 +614,9 @@
         bestDay,
         worstDay,
         totalTradingDays: dailyPnl.length,
-        totalTrades: trades.length
+        totalTrades: trades.length,
+        maxWinStreak,
+        maxLossStreak
       }
     };
   }
@@ -569,7 +655,16 @@
     setSub('stat-win-loss-count', s.winDays + ' W / ' + s.lossDays + ' L');
 
     setVal('stat-profit-factor', s.profitFactor === Infinity ? '∞' : s.profitFactor.toFixed(2));
-    setSub('stat-expectancy', 'Expectancy: ' + formatINR(s.expectancy));
+
+    setVal('stat-total-trades', s.totalTrades);
+
+    setVal('stat-expectancy-main', formatINR(s.expectancy), s.expectancy >= 0 ? 'profit' : 'loss');
+
+    setVal('stat-win-streak', s.maxWinStreak + ' Days', 'profit');
+    setVal('stat-loss-streak', s.maxLossStreak + ' Days', 'loss');
+
+    const avgTradesPerDay = s.totalTradingDays > 0 ? (s.totalTrades / s.totalTradingDays) : 0;
+    setVal('stat-avg-trades', avgTradesPerDay.toFixed(1));
 
     setVal('stat-max-dd', formatINR(s.maxDrawdown), 'loss');
     setSub('stat-max-dd-pct', formatPct(s.maxDrawdownPct), 'loss');
@@ -584,7 +679,7 @@
     setSub('stat-total-loss-days', 'Loss days: ' + s.lossDays);
 
     setVal('stat-volatility', (s.dailyVolatility * 100).toFixed(3) + '%');
-    setSub('stat-ann-volatility', 'Annualized: ' + (s.annualizedVolatility * 100).toFixed(2) + '%');
+    setSub('stat-annual-volatility', 'Annualized: ' + (s.annualizedVolatility * 100).toFixed(2) + '%');
 
     if (s.bestDay) {
       setVal('stat-best-day', formatINR(s.bestDay.netPnl), 'profit');
@@ -594,9 +689,6 @@
       setVal('stat-worst-day', formatINR(s.worstDay.netPnl), 'loss');
       setSub('stat-worst-day-date', formatDate(s.worstDay.date));
     }
-
-    setVal('stat-trading-days', s.totalTradingDays);
-    setSub('stat-total-trades', 'Trades: ' + s.totalTrades);
 
     // --- Charges tab ---
     document.getElementById('stat-brokerage').textContent = formatINR(result.totalChargesBreakdown.brokerage);
@@ -610,6 +702,7 @@
     renderEquityChart(result);
     renderWeekdayChart(result);
     renderMonthlyChart(result);
+    renderTimeOfDayChart(result);
     renderCalendar(result);
     renderWeeklyChart(result);
     renderChargesDonut(result);
@@ -780,6 +873,47 @@
 
     charts.monthly = new ApexCharts(document.getElementById('chart-monthly'), opts);
     charts.monthly.render();
+  }
+
+  function renderTimeOfDayChart(result) {
+    destroyChart('timeofday');
+    const tod = result.timeOfDayPnl;
+    if (!tod || tod.length === 0) return;
+
+    const categories = tod.map(t => t.time);
+    const values = tod.map(t => t.pnl);
+    const colors = values.map(v => v >= 0 ? '#22c55e' : '#ef4444');
+
+    const opts = {
+      ...chartDefaults,
+      chart: { ...chartDefaults.chart, type: 'bar', height: 260 },
+      series: [{ name: 'Net P&L', data: values }],
+      plotOptions: {
+        bar: {
+          borderRadius: 4,
+          columnWidth: '50%',
+          distributed: true
+        }
+      },
+      colors: colors,
+      xaxis: {
+        categories: categories,
+        labels: { style: { colors: '#8b8ba3', fontSize: '11px', fontWeight: 500 } },
+        axisBorder: { show: false }
+      },
+      yaxis: {
+        labels: {
+          style: { colors: '#5a5a72', fontSize: '11px' },
+          formatter: v => formatINRShort(v)
+        }
+      },
+      dataLabels: { enabled: false },
+      legend: { show: false },
+      tooltip: { theme: 'dark', y: { formatter: v => formatINR(v) } }
+    };
+
+    charts.timeofday = new ApexCharts(document.getElementById('chart-timeofday'), opts);
+    charts.timeofday.render();
   }
 
 
@@ -1286,11 +1420,9 @@
       // Use setTimeout to let the UI update before heavy processing
       setTimeout(() => {
         try {
-          const initialCapital = parseFloat(document.getElementById('initial-capital').value) || 3000000;
           const workbook = XLSX.read(uploadedFiles.trade, { type: 'array' });
-          const trades = parseTradeReport(workbook);
-          const result = runAnalysis(trades, initialCapital);
-          renderDashboard(result);
+          rawTrades = parseTradeReport(workbook);
+          applyGlobalFilterAndRender();
         } catch (err) {
           console.error('Analysis error:', err);
           alert('Error analyzing report: ' + err.message);
@@ -1393,6 +1525,35 @@
     });
   }
 
+  function initCsvExportHandler() {
+    document.getElementById('btn-export-csv').addEventListener('click', () => {
+      if (!analysisResult || analysisResult.realizedEvents.length === 0) return;
+      
+      const csvData = [
+        ['Date', 'Time', 'Symbol', 'Option Type', 'Strike', 'Qty', 'Entry Price', 'Exit Price', 'Realized P&L']
+      ];
+      
+      analysisResult.realizedEvents.forEach(ev => {
+        csvData.push([
+          formatDate(ev.date),
+          ev.tradeTime || '',
+          ev.symbol,
+          ev.optionType,
+          ev.strikePrice > 0 ? ev.strikePrice : '',
+          ev.qty,
+          ev.entryPrice.toFixed(2),
+          ev.exitPrice.toFixed(2),
+          ev.pnl.toFixed(2)
+        ]);
+      });
+      
+      const ws = XLSX.utils.aoa_to_sheet(csvData);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Realized_Trades");
+      XLSX.writeFile(wb, "vyro_backoffice_trades.csv");
+    });
+  }
+
   // ──────────────────────────────────────────────
   // 9. INIT
   // ──────────────────────────────────────────────
@@ -1417,14 +1578,17 @@
         document.getElementById('cal-date-to').value = last.toISOString().split('T')[0];
       }
     });
+    document.getElementById('global-filter-apply').addEventListener('click', () => {
+      applyGlobalFilterAndRender();
+    });
   }
-
   function init() {
     initUploadHandlers();
     initTabHandlers();
     initEquityToggle();
     initResetButton();
     initSearchHandler();
+    initCsvExportHandler();
     initCalendarHandlers();
   }
 
