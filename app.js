@@ -11,7 +11,7 @@
   // ──────────────────────────────────────────────
   // GLOBALS
   // ──────────────────────────────────────────────
-  let uploadedFiles = { trade: null, pl: null, fifo: null };
+  let uploadedFiles = { trade: null, pl: null };
   let rawTrades = [];         // Store parsed trades for fast re-filtering
   let analysisResult = null;
   let charts = {};
@@ -160,7 +160,19 @@
       const optionType = String(row[headers.indexOf('Option Type')] || '').trim().toUpperCase();
       const rate = toNum(row[headers.indexOf('Rate')]);
       const brokerage = toNum(row[headers.indexOf('Brokerage')]);
-      const tradeTime = row[headers.indexOf('Trade Time')];
+      
+      let tradeTimeRaw = row[headers.indexOf('Trade Time')];
+      let tradeTime = tradeTimeRaw;
+      if (typeof tradeTimeRaw === 'number') {
+        const fraction = tradeTimeRaw - Math.floor(tradeTimeRaw);
+        const totalSeconds = Math.round(fraction * 86400);
+        const hrs = Math.floor(totalSeconds / 3600);
+        const mins = Math.floor((totalSeconds % 3600) / 60);
+        const secs = totalSeconds % 60;
+        tradeTime = String(hrs).padStart(2, '0') + ':' + String(mins).padStart(2, '0') + ':' + String(secs).padStart(2, '0');
+      } else if (tradeTimeRaw != null) {
+        tradeTime = String(tradeTimeRaw).trim();
+      }
 
       const side = quantity > 0 ? 'Buy' : 'Sell';
       const absQty = Math.abs(quantity);
@@ -182,6 +194,153 @@
     });
 
     return trades;
+  }
+
+  function parsePlStatement(workbook) {
+    // ── FNO Sheet: per-contract realized PnL ──
+    const fnoSheet = workbook.Sheets['FNO'];
+    if (!fnoSheet) {
+      console.error('LongShortPL workbook is missing the "FNO" sheet.');
+      return null;
+    }
+    const fnoData = XLSX.utils.sheet_to_json(fnoSheet, { header: 1, defval: null });
+
+    // First row is the header in LongShortPL FNO sheet
+    let headerIdx = -1;
+    for (let i = 0; i < Math.min(10, fnoData.length); i++) {
+      if (fnoData[i] && Array.isArray(fnoData[i])) {
+        const rowStr = fnoData[i].map(x => String(x || '').toLowerCase()).join(' ');
+        if (rowStr.includes('symbol') && rowStr.includes('instrument')) {
+          headerIdx = i;
+          break;
+        }
+      }
+    }
+    if (headerIdx === -1) {
+      console.error('Could not find header in FNO sheet.');
+      return null;
+    }
+    const headers = fnoData[headerIdx].map(h => h ? String(h).trim() : '');
+
+    let adjustedGrossPnl = 0;
+    let plClosedQty = 0;
+    let plTotalContracts = 0;
+    let plOpenContracts = 0;
+    const plContracts = {}; // keyed by normalized contract string
+
+    for (let i = headerIdx + 1; i < fnoData.length; i++) {
+      const row = fnoData[i];
+      if (!row || !Array.isArray(row)) continue;
+
+      const instr = String(row[headers.indexOf('Instrument')] || '').trim();
+      if (instr !== 'OPTIDX' && instr !== 'FUTIDX') continue;
+
+      plTotalContracts++;
+
+      const symbol = String(row[headers.indexOf('Symbol')] || '').trim().toUpperCase();
+      const expiryRaw = row[headers.indexOf('Expiry Date')];
+      const expiry = parseExcelDate(expiryRaw);
+      const strikePrice = toNum(row[headers.indexOf('Strike Price')]);
+      const optionType = String(row[headers.indexOf('Option Type')] || '').trim().toUpperCase();
+
+      const bfQty = toNum(row[headers.indexOf('BF Qty')]);
+      const buyQty = toNum(row[headers.indexOf('Buy Qty')]);
+      const buyVal = toNum(row[headers.indexOf('Buy Value')]);
+      const bfVal = toNum(row[headers.indexOf('BF Value')]);
+
+      const sellQty = toNum(row[headers.indexOf('Sell Qty')]);
+      const sellVal = toNum(row[headers.indexOf('Sell Value')]);
+
+      const openQty = toNum(row[headers.indexOf('Open Qty')]);
+      const realPL = toNum(row[headers.indexOf('Real PL')]);
+
+      const totalBuyQty = bfQty + buyQty;
+      const closedQty = Math.min(totalBuyQty, sellQty);
+
+      if (openQty !== 0) {
+        plOpenContracts++;
+      }
+
+      // Build a contract key matching Vyro format: symbol|expiryISO|strike|optType|instrument
+      const expiryKey = expiry ? expiry.toISOString() : '';
+      const contractKey = [symbol, expiryKey, strikePrice, optionType, instr].join('|');
+
+      let closedPnl = 0;
+      if (closedQty > 0) {
+        plClosedQty += closedQty;
+        // Real PL in the broker FNO statement is already the realized PnL 
+        // for the closed legs. We can use it directly even for partially open contracts.
+        closedPnl = realPL;
+        adjustedGrossPnl += closedPnl;
+      }
+
+      plContracts[contractKey] = {
+        symbol, expiry, strikePrice, optionType, instrument: instr,
+        buyQty: totalBuyQty, sellQty, openQty, closedQty, realPL: closedPnl,
+        buyVal: totalBuyQty > 0 ? (bfVal + buyVal) : 0,
+        sellVal
+      };
+    }
+
+    // ── Expenses Sheet: FNO segment charges ──
+    const expSheet = workbook.Sheets['Expenses'];
+    if (!expSheet) {
+      console.error('LongShortPL workbook is missing the "Expenses" sheet.');
+      return null;
+    }
+    const expData = XLSX.utils.sheet_to_json(expSheet, { header: 1, defval: null });
+
+    let totalBrokerCharges = 0;
+    const chargesBreakdown = {};
+
+    // Expenses header: Segment ID, Description, Debit, Credit
+    let expHeaderIdx = -1;
+    for (let i = 0; i < Math.min(5, expData.length); i++) {
+      if (expData[i] && Array.isArray(expData[i])) {
+        const rowStr = expData[i].map(x => String(x || '').toLowerCase()).join(' ');
+        if (rowStr.includes('segment') && rowStr.includes('description')) {
+          expHeaderIdx = i;
+          break;
+        }
+      }
+    }
+    if (expHeaderIdx === -1) expHeaderIdx = 0; // assume first row is header
+
+    const expHeaders = expData[expHeaderIdx].map(h => h ? String(h).trim() : '');
+    const segIdx = expHeaders.findIndex(h => h.toLowerCase().includes('segment'));
+    const descIdx = expHeaders.findIndex(h => h.toLowerCase().includes('description'));
+    const debitIdx = expHeaders.findIndex(h => h.toLowerCase().includes('debit'));
+
+    for (let i = expHeaderIdx + 1; i < expData.length; i++) {
+      const row = expData[i];
+      if (!row || !Array.isArray(row)) continue;
+
+      const segment = String(row[segIdx] || '').trim().toUpperCase();
+      if (segment !== 'FNO') continue;
+
+      const description = String(row[descIdx] || '').trim().toUpperCase();
+      const debit = toNum(row[debitIdx]);
+
+      // Only take charge-related rows (skip FOOBL/settlement entries)
+      if (description.includes('BROKERAGE') || description.includes('TRANSACTION CHARGES') ||
+          description.includes('GST') || description.includes('SEBI') ||
+          description.includes('STT') || description.includes('STAMP') ||
+          description.includes('IPF')) {
+        totalBrokerCharges += debit;
+        chargesBreakdown[description] = (chargesBreakdown[description] || 0) + debit;
+      }
+    }
+
+    return {
+      adjustedGrossPnl,
+      originalTotalCharges: totalBrokerCharges,
+      adjustedTotalCharges: totalBrokerCharges,
+      plClosedQty,
+      plTotalContracts,
+      plOpenContracts,
+      chargesBreakdown,
+      plContracts
+    };
   }
 
   function applyGlobalFilterAndRender() {
@@ -232,29 +391,30 @@
     let stt = 0, exchangeCharge = 0, gst = 0, sebi = 0, stamp = 0;
 
     if (instrument === 'OPTIDX') {
-      // STT: 0.05% on sell side
+      // STT: 0.15% on sell side
       if (side === 'Sell') {
-        stt = 0.0005 * turnover;
+        stt = 0.0015 * turnover;
       }
-      // Exchange transaction charges
+      // Exchange transaction charges: NSE 0.035%, BSE 0.0325%
       if (exchange === 'NSE') {
-        exchangeCharge = 0.0000295 * turnover;
+        exchangeCharge = 0.00035 * turnover;
       } else {
-        exchangeCharge = 0.0000325 * turnover;
+        exchangeCharge = 0.000325 * turnover;
       }
       // Stamp duty: 0.003% on buy side
       if (side === 'Buy') {
         stamp = 0.00003 * turnover;
       }
     } else if (instrument === 'FUTIDX') {
-      // STT: 0.01% on sell side
+      // STT: 0.05% on sell side
       if (side === 'Sell') {
-        stt = 0.0001 * turnover;
+        stt = 0.0005 * turnover;
       }
+      // Exchange transaction charges: NSE 0.00173%
       if (exchange === 'NSE') {
-        exchangeCharge = 0.000019 * turnover;
+        exchangeCharge = 0.0000173 * turnover;
       } else {
-        exchangeCharge = 0.000021 * turnover;
+        exchangeCharge = 0.0000173 * turnover; // fallback
       }
       if (side === 'Buy') {
         stamp = 0.00002 * turnover;
@@ -318,7 +478,7 @@
           if (lot.qty <= 0) shortLots[key].shift();
         }
         if (qty > 0) {
-          longLots[key].push({ qty, price, date: tradeDate });
+          longLots[key].push({ qty, price, date: tradeDate, time: trade.tradeTime });
         }
       } else {
         // Close long positions first
@@ -343,7 +503,7 @@
           if (lot.qty <= 0) longLots[key].shift();
         }
         if (qty > 0) {
-          shortLots[key].push({ qty, price, date: tradeDate });
+          shortLots[key].push({ qty, price, date: tradeDate, time: trade.tradeTime });
         }
       }
     }
@@ -353,14 +513,14 @@
     for (const key in longLots) {
       for (const lot of longLots[key]) {
         if (lot.qty > 0) {
-          openPositions.push({ contract: key, side: 'Long', qty: lot.qty, avgPrice: lot.price, date: lot.date });
+          openPositions.push({ contract: key, side: 'Long', qty: lot.qty, avgPrice: lot.price, date: lot.date, time: lot.time });
         }
       }
     }
     for (const key in shortLots) {
       for (const lot of shortLots[key]) {
         if (lot.qty > 0) {
-          openPositions.push({ contract: key, side: 'Short', qty: lot.qty, avgPrice: lot.price, date: lot.date });
+          openPositions.push({ contract: key, side: 'Short', qty: lot.qty, avgPrice: lot.price, date: lot.date, time: lot.time });
         }
       }
     }
@@ -709,6 +869,8 @@
     renderChargesVsPnl(result);
 
     // --- Render tables ---
+    renderDiscrepancy(result);
+    renderOpenTradesTable(result);
     renderTradeTable(result);
     renderDailyPnlTable(result);
   }
@@ -1354,6 +1516,320 @@
     });
   }
 
+  function renderOpenTradesTable(result) {
+    const thead = document.getElementById('open-trades-head');
+    const cols = ['Contract', 'Side', 'Quantity', 'Avg Price', 'Value (₹)', 'Date', 'Time'];
+    if (thead) thead.innerHTML = cols.map(c => '<th>' + c + '</th>').join('');
+
+    const tbody = document.getElementById('open-trades-body');
+    if (!tbody) return;
+    const openPositions = result.openPositions || [];
+    
+    if (openPositions.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 20px;">No open trades found</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = openPositions.map(op => {
+      const sideCls = (op.side === 'Long' || op.side === 'Buy') ? 'profit' : 'loss';
+      
+      let displayContract = op.contract;
+      const parts = (op.contract || '').split('|');
+      if (parts.length === 5) {
+         const sym = parts[0];
+         const exp = parts[1] ? formatDate(new Date(parts[1])) : '';
+         const strike = (parts[2] && parts[2] !== '0') ? parts[2] : '';
+         const optType = parts[3];
+         const instr = parts[4];
+         displayContract = [sym, exp, strike, optType, instr].filter(Boolean).join(' ');
+      }
+
+      return '<tr>' +
+        '<td>' + displayContract + '</td>' +
+        '<td class="' + sideCls + '">' + op.side + '</td>' +
+        '<td>' + op.qty + '</td>' +
+        '<td>' + (op.avgPrice ? op.avgPrice.toFixed(2) : '—') + '</td>' +
+        '<td>' + (op.avgPrice ? formatINR(op.qty * op.avgPrice) : '—') + '</td>' +
+        '<td>' + formatDate(op.date) + '</td>' +
+        '<td>' + (op.time || '—') + '</td>' +
+        '</tr>';
+    }).join('');
+  }
+
+  function renderDiscrepancy(result) {
+    const emptyEl = document.getElementById('discrepancy-empty');
+    const resultsEl = document.getElementById('discrepancy-results');
+    const contractResultsEl = document.getElementById('discrepancy-contract-results');
+    
+    if (!emptyEl || !resultsEl) return;
+    
+    if (!window.parsedPlStatement) {
+      emptyEl.classList.remove('hidden');
+      resultsEl.classList.add('hidden');
+      if (contractResultsEl) contractResultsEl.classList.add('hidden');
+      return;
+    }
+    emptyEl.classList.add('hidden');
+    resultsEl.classList.remove('hidden');
+    if (contractResultsEl) contractResultsEl.classList.remove('hidden');
+
+    const broker = window.parsedPlStatement;
+    const vyroGross = result.stats.totalGrossPnl;
+    const vyroCharges = result.stats.totalCharges;
+    const vyroNet = vyroGross - vyroCharges;
+
+    const brokerGross = broker.adjustedGrossPnl;
+    const brokerCharges = broker.adjustedTotalCharges;
+    const brokerNet = brokerGross - brokerCharges;
+
+    const diffGross = vyroGross - brokerGross;
+    const diffCharges = vyroCharges - brokerCharges;
+    const diffNet = vyroNet - brokerNet;
+
+    const vyroClosedQty = result.realizedEvents.reduce((acc, ev) => acc + ev.qty, 0);
+    const brokerClosedQty = broker.plClosedQty;
+    const diffClosedQty = vyroClosedQty - brokerClosedQty;
+
+    const tbody = document.getElementById('discrepancy-body');
+    if (!tbody) return;
+    
+    let html = '<tr>' +
+      '<td>Gross P&L (Closed Only)</td>' +
+      '<td class="' + (vyroGross >= 0 ? 'profit' : 'loss') + '">' + formatINR(vyroGross) + '</td>' +
+      '<td class="' + (brokerGross >= 0 ? 'profit' : 'loss') + '">' + formatINR(brokerGross) + '</td>' +
+      '<td class="' + (Math.abs(diffGross) < 1 ? '' : (diffGross > 0 ? 'profit' : 'loss')) + '">' + formatINR(diffGross) + '</td>' +
+      '</tr>' +
+      '<tr>' +
+      '<td>Total Charges (FNO Segment)</td>' +
+      '<td>' + formatINR(vyroCharges) + '</td>' +
+      '<td>' + formatINR(brokerCharges) + '</td>' +
+      '<td class="' + (Math.abs(diffCharges) < 1 ? '' : (diffCharges < 0 ? 'profit' : 'loss')) + '">' + formatINR(diffCharges) + '</td>' +
+      '</tr>' +
+      '<tr>' +
+      '<td><strong>Net P&L</strong></td>' +
+      '<td class="' + (vyroNet >= 0 ? 'profit' : 'loss') + '"><strong>' + formatINR(vyroNet) + '</strong></td>' +
+      '<td class="' + (brokerNet >= 0 ? 'profit' : 'loss') + '"><strong>' + formatINR(brokerNet) + '</strong></td>' +
+      '<td class="' + (Math.abs(diffNet) < 1 ? '' : (diffNet > 0 ? 'profit' : 'loss')) + '"><strong>' + formatINR(diffNet) + '</strong></td>' +
+      '</tr>' +
+      '<tr>' +
+      '<td>Closed Quantity (Lots)</td>' +
+      '<td>' + vyroClosedQty + '</td>' +
+      '<td>' + brokerClosedQty + '</td>' +
+      '<td class="' + (diffClosedQty !== 0 ? 'loss' : '') + '">' + diffClosedQty + '</td>' +
+      '</tr>' +
+      '<tr>' +
+      '<td>Total Contracts in FNO Sheet</td>' +
+      '<td colspan="3" style="text-align:center;">' + broker.plTotalContracts + ' (' + broker.plOpenContracts + ' open, ' + (broker.plTotalContracts - broker.plOpenContracts) + ' closed)</td>' +
+      '</tr>';
+
+    // Charges breakdown from Expenses sheet
+    if (broker.chargesBreakdown && Object.keys(broker.chargesBreakdown).length > 0) {
+      html += '<tr><td colspan="4" style="padding: 12px 16px; font-weight: 600; color: #a78bfa; border-top: 1px solid rgba(255,255,255,0.06);">Broker Charges Breakdown (FNO Expenses Sheet)</td></tr>';
+      for (const [desc, amt] of Object.entries(broker.chargesBreakdown)) {
+        html += '<tr>' +
+          '<td style="padding-left:28px;">' + desc.charAt(0) + desc.slice(1).toLowerCase() + '</td>' +
+          '<td colspan="2"></td>' +
+          '<td>' + formatINR(amt) + '</td>' +
+          '</tr>';
+      }
+    }
+
+    tbody.innerHTML = html;
+
+    // --- Per-Contract Discrepancy ---
+    const contractTbody = document.getElementById('discrepancy-contract-body');
+    if (!contractTbody) return;
+
+    let vyroTotalBuyQty = 0, vyroTotalBuyVal = 0;
+    let vyroTotalSellQty = 0, vyroTotalSellVal = 0;
+    let brokerTotalBuyQty = 0, brokerTotalBuyVal = 0;
+    let brokerTotalSellQty = 0, brokerTotalSellVal = 0;
+
+    const vyroContracts = {};
+    result.trades.forEach(t => {
+      const expiryKey = t.expiryDate ? t.expiryDate.toISOString() : '';
+      const symbol = (t.symbol || '').toUpperCase();
+      const strikePrice = toNum(t.strikePrice);
+      const optionType = (t.optionType || '').toUpperCase();
+      const instr = (t.instrument || '').toUpperCase();
+      
+      const key = [symbol, expiryKey, strikePrice, optionType, instr].join('|');
+      
+      if (!vyroContracts[key]) {
+        vyroContracts[key] = { buyQty: 0, sellQty: 0, buyVal: 0, sellVal: 0, symbol, strikePrice, optionType };
+      }
+      if (t.side === 'Buy') {
+        vyroContracts[key].buyQty += t.absQty;
+        vyroContracts[key].buyVal += t.absQty * t.rate;
+        vyroTotalBuyQty += t.absQty;
+        vyroTotalBuyVal += t.absQty * t.rate;
+      } else {
+        vyroContracts[key].sellQty += t.absQty;
+        vyroContracts[key].sellVal += t.absQty * t.rate;
+        vyroTotalSellQty += t.absQty;
+        vyroTotalSellVal += t.absQty * t.rate;
+      }
+    });
+
+    const brokerContracts = broker.plContracts || {};
+    
+    // Combine keys
+    const allKeys = new Set([...Object.keys(vyroContracts), ...Object.keys(brokerContracts)]);
+    const mismatches = [];
+    let matchedContractsCount = 0;
+
+    allKeys.forEach(key => {
+      const v = vyroContracts[key] || { buyQty: 0, sellQty: 0, buyVal: 0, sellVal: 0 };
+      const b = brokerContracts[key] || { buyQty: 0, sellQty: 0, buyVal: 0, sellVal: 0 };
+      
+      brokerTotalBuyQty += (b.buyQty || 0);
+      brokerTotalSellQty += (b.sellQty || 0);
+      brokerTotalBuyVal += (b.buyVal || 0);
+      brokerTotalSellVal += (b.sellVal || 0);
+
+      const diffBuy = v.buyQty - b.buyQty;
+      const diffSell = v.sellQty - b.sellQty;
+      const diffBuyVal = (v.buyVal || 0) - (b.buyVal || 0);
+      const diffSellVal = (v.sellVal || 0) - (b.sellVal || 0);
+      
+      // Allow minor value rounding diffs
+      if (Math.abs(diffBuy) > 0.001 || Math.abs(diffSell) > 0.001 || Math.abs(diffBuyVal) > 5 || Math.abs(diffSellVal) > 5) {
+        const parts = key.split('|');
+        const symbol = parts[0];
+        const strike = parts[2];
+        const opt = parts[3];
+        const expiryIso = parts[1];
+        let expiryStr = '—';
+        if (expiryIso) {
+          const d = new Date(expiryIso);
+          expiryStr = d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+        }
+        
+        mismatches.push({
+          label: symbol + ' ' + expiryStr + ' ' + strike + ' ' + opt,
+          vyroBuy: v.buyQty, brokerBuy: b.buyQty, diffBuy,
+          vyroSell: v.sellQty, brokerSell: b.sellQty, diffSell
+        });
+      } else {
+        matchedContractsCount++;
+      }
+    });
+
+    // Create the overarching "Validation result" table below the main discrepancy tables
+    if (mismatches.length === 0) {
+      contractTbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: #10b981; padding: 20px;">✓ All quantities match perfectly between Vyro and the broker PL.</td></tr>';
+    } else {
+      contractTbody.innerHTML = mismatches.map(m => {
+        return '<tr>' +
+          '<td>' + m.label + '</td>' +
+          '<td>' + m.vyroBuy + '</td>' +
+          '<td>' + m.brokerBuy + '</td>' +
+          '<td>' + m.vyroSell + '</td>' +
+          '<td>' + m.brokerSell + '</td>' +
+          '<td class="loss">Buy: ' + m.diffBuy + ' / Sell: ' + m.diffSell + '</td>' +
+          '</tr>';
+      }).join('');
+    }
+
+    const validationHtml = `
+      <section class="chart-card full-width" style="margin-top:20px;">
+        <div class="chart-header">
+          <h2>Validation Result</h2>
+        </div>
+        <div class="table-wrapper">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Check</th>
+                <th>Result</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Executed F&O trade rows</td>
+                <td>${result.trades.length}</td>
+              </tr>
+              <tr>
+                <td>Unique F&O contracts</td>
+                <td>${allKeys.size}</td>
+              </tr>
+              <tr>
+                <td>Contracts matched</td>
+                <td>${matchedContractsCount} / ${allKeys.size}</td>
+              </tr>
+              <tr>
+                <td>Unmatched contract quantities/values</td>
+                <td class="${mismatches.length > 0 ? 'loss' : 'profit'}">${mismatches.length}</td>
+              </tr>
+              <tr>
+                <td>Confirmation Buy Qty</td>
+                <td>${vyroTotalBuyQty}</td>
+              </tr>
+              <tr>
+                <td>Broker FNO Buy Qty</td>
+                <td>${brokerTotalBuyQty}</td>
+              </tr>
+              <tr>
+                <td>Confirmation Buy Value</td>
+                <td>${formatINR(vyroTotalBuyVal)}</td>
+              </tr>
+              <tr>
+                <td>Broker FNO Buy Value</td>
+                <td>${formatINR(brokerTotalBuyVal)}</td>
+              </tr>
+              <tr>
+                <td>Confirmation Sell Qty</td>
+                <td>${vyroTotalSellQty}</td>
+              </tr>
+              <tr>
+                <td>Broker FNO Sell Qty</td>
+                <td>${brokerTotalSellQty}</td>
+              </tr>
+              <tr>
+                <td>Confirmation Sell Value</td>
+                <td>${formatINR(vyroTotalSellVal)}</td>
+              </tr>
+              <tr>
+                <td>Broker FNO Sell Value</td>
+                <td>${formatINR(brokerTotalSellVal)}</td>
+              </tr>
+              <tr>
+                <td>Brokerage in confirmation</td>
+                <td>${formatINR(result.trades.reduce((sum, t) => sum + (t.brokerage || 0), 0))}</td>
+              </tr>
+              <tr>
+                <td>Brokerage in Expenses</td>
+                <td>${formatINR(broker.chargesBreakdown && broker.chargesBreakdown['BROKERAGE'] ? broker.chargesBreakdown['BROKERAGE'] : 0)}</td>
+              </tr>
+              <tr>
+                <td>FIFO-reconstructed F&O realized P&L</td>
+                <td>${formatINR(vyroGross)}</td>
+              </tr>
+              <tr>
+                <td>Broker FNO realized P&L</td>
+                <td>${formatINR(brokerGross)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    `;
+
+    // Append validationHtml after contractTbody
+    const container = document.getElementById('discrepancy-contract-results');
+    if (container) {
+      // Create or update validation container
+      let valEl = document.getElementById('validation-container');
+      if (!valEl) {
+        valEl = document.createElement('div');
+        valEl.id = 'validation-container';
+        container.parentNode.insertBefore(valEl, container.nextSibling);
+      }
+      valEl.innerHTML = validationHtml;
+    }
+
+  }
+
   function renderDailyPnlTable(result) {
     const thead = document.getElementById('daily-pnl-head');
     const cols = ['Date', 'Day', 'Gross P&L', 'Charges', 'Net P&L', 'Cumulative', 'Equity', 'Drawdown', 'DD %'];
@@ -1382,8 +1858,7 @@
   function initUploadHandlers() {
     const zones = [
       { zoneId: 'zone-trade', inputId: 'file-trade', statusId: 'status-trade', type: 'trade' },
-      { zoneId: 'zone-pl', inputId: 'file-pl', statusId: 'status-pl', type: 'pl' },
-      { zoneId: 'zone-fifo', inputId: 'file-fifo', statusId: 'status-fifo', type: 'fifo' }
+      { zoneId: 'zone-pl', inputId: 'file-pl', statusId: 'status-pl', type: 'pl' }
     ];
 
     zones.forEach(z => {
@@ -1412,7 +1887,7 @@
 
     // Analyze button
     document.getElementById('btn-analyze').addEventListener('click', () => {
-      if (!uploadedFiles.trade) return;
+      if (!uploadedFiles.trade || !uploadedFiles.pl) return;
       const btn = document.getElementById('btn-analyze');
       btn.classList.add('loading');
       btn.disabled = true;
@@ -1422,6 +1897,10 @@
         try {
           const workbook = XLSX.read(uploadedFiles.trade, { type: 'array' });
           rawTrades = parseTradeReport(workbook);
+          
+          const plWb = XLSX.read(uploadedFiles.pl, { type: 'array' });
+          window.parsedPlStatement = parsePlStatement(plWb);
+
           applyGlobalFilterAndRender();
         } catch (err) {
           console.error('Analysis error:', err);
@@ -1447,7 +1926,7 @@
 
   function updateAnalyzeButton() {
     const btn = document.getElementById('btn-analyze');
-    btn.disabled = !uploadedFiles.trade;
+    btn.disabled = !(uploadedFiles.trade && uploadedFiles.pl);
   }
 
   function initTabHandlers() {
@@ -1501,13 +1980,13 @@
       // Destroy all charts
       Object.keys(charts).forEach(k => destroyChart(k));
       // Reset state
-      uploadedFiles = { trade: null, pl: null, fifo: null };
+      uploadedFiles = { trade: null, pl: null };
       analysisResult = null;
+      window.parsedPlStatement = null;
       // Reset upload zones
       document.querySelectorAll('.upload-zone').forEach(z => z.classList.remove('uploaded'));
       document.getElementById('status-trade').textContent = 'Drop .xlsx or click to upload';
-      document.getElementById('status-pl').textContent = 'Optional — Drop .xlsx or click';
-      document.getElementById('status-fifo').textContent = 'Optional — Drop .xlsx or click';
+      document.getElementById('status-pl').textContent = 'Drop .xlsx or click to upload';
       document.querySelectorAll('.zone-file-input').forEach(inp => { inp.value = ''; });
       updateAnalyzeButton();
       // Switch screens

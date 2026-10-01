@@ -36,8 +36,8 @@
           <div class="zone-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10,9 9,9 8,9"/></svg>
           </div>
-          <h3>Trade Report</h3>
-          <p>Trade Confirmation with individual trades</p>
+          <h3>Trade Confirmation</h3>
+          <p>DerivativeTradeConfirmation.xlsx — Individual trade entries</p>
           <span class="zone-status" id="status-trade">Drop .xlsx or click to upload</span>
           <input type="file" accept=".xlsx,.xls,.csv" class="zone-file-input" id="file-trade" />
         </div>
@@ -46,20 +46,10 @@
           <div class="zone-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17,8 12,3 7,8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
           </div>
-          <h3>Derivative PL Statement</h3>
-          <p>Symbol-wise P&amp;L summary</p>
-          <span class="zone-status" id="status-pl">Optional — Drop .xlsx or click</span>
+          <h3>Long Short PL</h3>
+          <p>LongShortPL — FNO &amp; Expenses sheets for validation</p>
+          <span class="zone-status" id="status-pl">Drop .xlsx or click to upload</span>
           <input type="file" accept=".xlsx,.xls,.csv" class="zone-file-input" id="file-pl" />
-        </div>
-
-        <div class="upload-zone" id="zone-fifo" data-type="fifo">
-          <div class="zone-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
-          </div>
-          <h3>FIFO Net Position</h3>
-          <p>FIFO-matched net positions</p>
-          <span class="zone-status" id="status-fifo">Optional — Drop .xlsx or click</span>
-          <input type="file" accept=".xlsx,.xls,.csv" class="zone-file-input" id="file-fifo" />
         </div>
       </div>
 
@@ -67,7 +57,7 @@
         <span class="btn-text">Analyze Reports</span>
         <span class="btn-loader"></span>
       </button>
-      <p class="upload-note">Trade Report is mandatory. PL Statement and FIFO are optional cross-references.</p>
+      <p class="upload-note">Both files are mandatory. Trade Confirmation provides individual trades; Long Short PL provides broker-side validation.</p>
     </div>
   </div>
 
@@ -95,6 +85,7 @@
         <button class="tab-btn" data-tab="trades" id="tab-btn-trades">Trades</button>
         <button class="tab-btn" data-tab="calendar" id="tab-btn-calendar">Calendar</button>
         <button class="tab-btn" data-tab="charges" id="tab-btn-charges">Charges</button>
+        <button class="tab-btn" data-tab="discrepancy" id="tab-btn-discrepancy">Discrepancy</button>
       </div>
       <div class="topbar-right">
         <div class="capital-badge">
@@ -233,6 +224,18 @@
     <main id="tab-trades" class="tab-content">
       <section class="chart-card full-width">
         <div class="chart-header">
+          <h2>Open Trades</h2>
+        </div>
+        <div class="table-wrapper" id="open-trades-table-wrapper">
+          <table id="open-trades-table" class="data-table">
+            <thead><tr id="open-trades-head"></tr></thead>
+            <tbody id="open-trades-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="chart-card full-width">
+        <div class="chart-header">
           <h2>Trade Log</h2>
           <div class="table-controls">
             <button class="table-btn-export" id="btn-export-csv" title="Download CSV">
@@ -356,6 +359,63 @@
         <div class="chart-card">
           <div class="chart-header"><h2>Daily Charges vs Gross P&amp;L</h2></div>
           <div id="chart-charges-vs-pnl" class="chart-area chart-area-sm"></div>
+        </div>
+      </section>
+    </main>
+
+    <!-- ============ DISCREPANCY TAB ============ -->
+    <main id="tab-discrepancy" class="tab-content">
+      <section class="chart-card full-width" id="discrepancy-empty">
+        <div style="text-align: center; padding: 40px; color: #8b8ba3;">
+          <p>Upload both files and click Analyze to view the reconciliation report.</p>
+        </div>
+      </section>
+
+      <section class="chart-card full-width hidden" id="discrepancy-results">
+        <div class="chart-header">
+          <h2>Reconciliation Report</h2>
+        </div>
+        <div class="table-wrapper">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Metric</th>
+                <th>Vyro Analysis (Trade Confirmation)</th>
+                <th>Broker PL (LongShort FNO — Closed Only)</th>
+                <th>Discrepancy</th>
+              </tr>
+            </thead>
+            <tbody id="discrepancy-body">
+            </tbody>
+          </table>
+        </div>
+        <div style="margin-top: 15px; font-size: 12px; color: #8b8ba3;">
+          * PnL from FNO sheet considers only closed positions (Open Qty = 0 uses Real PL directly). Charges are pulled from the Expenses sheet filtered to FNO segment only.
+        </div>
+      </section>
+
+      <section class="chart-card full-width hidden" id="discrepancy-contract-results">
+        <div class="chart-header">
+          <h2>Per-Contract Quantity Discrepancies</h2>
+        </div>
+        <div class="table-wrapper">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Contract</th>
+                <th>Vyro Buy Qty</th>
+                <th>Broker Buy Qty</th>
+                <th>Vyro Sell Qty</th>
+                <th>Broker Sell Qty</th>
+                <th>Discrepancy (Buy / Sell)</th>
+              </tr>
+            </thead>
+            <tbody id="discrepancy-contract-body">
+            </tbody>
+          </table>
+        </div>
+        <div style="margin-top: 15px; font-size: 12px; color: #8b8ba3;">
+          * Only contracts with mismatched Buy/Sell quantities between the Trade Confirmation (Vyro) and the LongShortPL FNO sheet (Broker) are shown above. If the table is empty, all quantities match perfectly.
         </div>
       </section>
     </main>
